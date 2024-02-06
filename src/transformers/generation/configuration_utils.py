@@ -324,6 +324,11 @@ class GenerationConfig(PushToHubMixin):
         # Prompt lookup decoding
         self.prompt_lookup_num_tokens = kwargs.pop("prompt_lookup_num_tokens", None)
 
+        # external document lookup decoding
+        self.external_doc_lookup_num_tokens = kwargs.pop("external_doc_lookup_num_tokens", None)
+        self.tokenizer = kwargs.pop("tokenizer", None)
+        self.external_doc = kwargs.pop("external_doc", None)
+
         # Wild card
         self.generation_kwargs = kwargs.pop("generation_kwargs", {})
 

@@ -43,7 +43,7 @@ from .candidate_generator import (
     PromptLookupCandidateGenerator,
     _crop_past_key_values,
     _prepare_attention_mask,
-    _prepare_token_type_ids,
+    _prepare_token_type_ids, ExternalDocLookupCandidateGenerator,
 )
 from .configuration_utils import GenerationConfig
 from .logits_process import (
@@ -646,6 +646,7 @@ class GenerationMixin:
         input_ids: torch.LongTensor,
         inputs_tensor: torch.Tensor,
         assistant_model: "PreTrainedModel",
+        assistant_tokenizer: "PreTrainedTokenizer",
         logits_processor: LogitsProcessorList,
         model_kwargs: Dict,
     ) -> CandidateGenerator:
@@ -655,6 +656,12 @@ class GenerationMixin:
         if generation_config.prompt_lookup_num_tokens is not None:
             candidate_generator = PromptLookupCandidateGenerator(
                 num_output_tokens=generation_config.prompt_lookup_num_tokens,
+            )
+        elif generation_config.external_doc_lookup_num_tokens is not None:
+            candidate_generator = ExternalDocLookupCandidateGenerator(
+                num_output_tokens=generation_config.external_doc_lookup_num_tokens,
+                doc=generation_config.external_doc,
+                assistant_tokenizer=assistant_tokenizer
             )
         else:
             candidate_generator = AssistedCandidateGenerator(
@@ -744,7 +751,7 @@ class GenerationMixin:
                 generation_mode = GenerationMode.BEAM_SEARCH
 
         # Assisted generation may extend some generation modes
-        if assistant_model is not None or generation_config.prompt_lookup_num_tokens is not None:
+        if assistant_model is not None or generation_config.prompt_lookup_num_tokens is not None or generation_config.external_doc_lookup_num_tokens is not None:
             if generation_mode in ("greedy_search", "sample"):
                 generation_mode = GenerationMode.ASSISTED_GENERATION
             else:
@@ -1180,6 +1187,7 @@ class GenerationMixin:
         prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor], List[int]]] = None,
         synced_gpus: Optional[bool] = None,
         assistant_model: Optional["PreTrainedModel"] = None,
+        assistant_tokenizer: Optional["PreTrainedTokenizer"] = None,
         streamer: Optional["BaseStreamer"] = None,
         negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
@@ -1454,6 +1462,7 @@ class GenerationMixin:
                 input_ids=input_ids,
                 inputs_tensor=inputs_tensor,
                 assistant_model=assistant_model,
+                assistant_tokenizer=assistant_tokenizer,
                 logits_processor=logits_processor,
                 model_kwargs=model_kwargs,
             )
