@@ -939,7 +939,7 @@ class TransfoXLModel(TransfoXLPreTrainedModel):
         attentions = [] if output_attentions else None
         if self.attn_type == 0:  # default
             pos_seq = torch.arange(klen - 1, -1, -1.0, device=word_emb.device, dtype=torch.int64).type_as(
-                dtype=word_emb.dtype
+                 word_emb
             )
             if self.clamp_len > 0:
                 pos_seq.clamp_(max=self.clamp_len)
