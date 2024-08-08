@@ -3228,9 +3228,12 @@ class GenerationMixin:
                 inputs_per_sub_batches = _split_model_inputs(
                     model_inputs, split_size=batch_size, full_batch_size=batch_beam_size
                 )
-                outputs_per_sub_batch = [
-                    self(**inputs_per_sub_batch, return_dict=True) for inputs_per_sub_batch in inputs_per_sub_batches
-                ]
+
+                outputs_per_sub_batch = []
+                for input in inputs_per_sub_batches:
+                    outputs = self(**input, return_dict=True)
+                    outputs["past_key_values"] = None
+                    outputs_per_sub_batch.append(outputs)
 
                 outputs = stack_model_outputs(outputs_per_sub_batch)
 
