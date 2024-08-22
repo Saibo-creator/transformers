@@ -175,8 +175,8 @@ class BeamSearchScorer(BeamScorer):
         self.length_penalty = length_penalty
         self.do_early_stopping = do_early_stopping
         self.num_beam_hyps_to_keep = num_beam_hyps_to_keep
-        self.num_beam_groups = num_beam_groups
-        self.group_size = self.num_beams // self.num_beam_groups
+        self.num_beam_groups = num_beam_groups # SAIBO: by default = 1
+        self.group_size = self.num_beams // self.num_beam_groups # SAIBO: by default = num_beams
 
         self._is_init = False
         # self._beam_hyps[i*self.num_beam_groups+j] is the beam_hyps of the j-th group in the i-th mini-batch.
@@ -214,10 +214,10 @@ class BeamSearchScorer(BeamScorer):
 
     def process(
         self,
-        input_ids: torch.LongTensor,
-        next_scores: torch.FloatTensor,
-        next_tokens: torch.LongTensor,
-        next_indices: torch.LongTensor,
+        input_ids: torch.LongTensor,    # SAIBO: shape (batch_size * num_beams/num_beam_groups, sequence_length)
+        next_scores: torch.FloatTensor, # SAIBO: shape (batch_size, 2 * num_beams)
+        next_tokens: torch.LongTensor,  # same as above
+        next_indices: torch.LongTensor, # same as above
         pad_token_id: Optional[int] = None,
         eos_token_id: Optional[Union[int, List[int]]] = None,
         beam_indices: Optional[torch.LongTensor] = None,
@@ -240,16 +240,23 @@ class BeamSearchScorer(BeamScorer):
                     f"{self.group_size} is expected by the beam scorer."
                 )
 
+        # data to be returned
         device = input_ids.device
+        # next_beam_scores is the updated scores of all beams
         next_beam_scores = torch.zeros((batch_size, self.group_size), dtype=next_scores.dtype, device=device)
+        # next_beam_tokens is the next token to be added 
         next_beam_tokens = torch.zeros((batch_size, self.group_size), dtype=next_tokens.dtype, device=device)
+        # next_beam_indices is the index of the beam_hyps in the list of beam_hyps, which hypothesis is extended.
         next_beam_indices = torch.zeros((batch_size, self.group_size), dtype=next_indices.dtype, device=device)
 
         if isinstance(eos_token_id, int):
             eos_token_id = [eos_token_id]
 
+        # loop over batch, sentence by sentence
         for batch_idx in range(batch_size):
             batch_group_idx = batch_idx * self.num_beam_groups + group_index
+
+            # if this batch is already done (maybe it was finished a few steps before)
             if self._done[batch_group_idx]:
                 if self.num_beams < len(self._beam_hyps[batch_group_idx]):
                     raise ValueError(f"Batch can only be done if at least {self.num_beams} beams have been generated")
@@ -261,13 +268,17 @@ class BeamSearchScorer(BeamScorer):
                 next_beam_indices[batch_idx, :] = 0
                 continue
 
-            # next tokens for this sentence
+            # next tokens for this sentence, choose num_beam out of 2*num_beams
             beam_idx = 0
+
+            # TODO,
+            # if we go with next_token_scores with dynamic shape, we don't need to change the following code
             for beam_token_rank, (next_token, next_score, next_index) in enumerate(
                 zip(next_tokens[batch_idx], next_scores[batch_idx], next_indices[batch_idx])
             ):
                 batch_beam_idx = batch_idx * self.group_size + next_index
                 # add to generated hypotheses if end of sentence
+                # SAIBO: as this is already finished, we don't include it in the next_beam_scores
                 if (eos_token_id is not None) and (next_token.item() in eos_token_id):
                     # if beam_token does not belong to top num_beams tokens, it should not be added
                     is_beam_token_worse_than_top_num_beams = beam_token_rank >= self.group_size
@@ -295,7 +306,15 @@ class BeamSearchScorer(BeamScorer):
                 # once the beam for next step is full, don't add more tokens to it.
                 if beam_idx == self.group_size:
                     break
+            
+            # TODO, if we go with next_token_scores with dynamic shape, we may get this error because we don't have
+            # enough tokens to fill the beam
+            # if we chose to keep -inf in next_beam_scores, then it should be fine to not change the above code at all.
+            #
+            # Solution is to set them to the same value as the last valid beam
+            # we can deduplicate later
 
+            # One way is to use dynamic shape for next_token_scores in the returned dict
             if beam_idx < self.group_size:
                 raise ValueError(
                     f"At most {self.group_size} tokens in {next_tokens[batch_idx]} can be equal to `eos_token_id:"
@@ -951,7 +970,7 @@ class BeamHypotheses:
         generated_len: Optional[int] = None,
     ):
         """
-        Add a new hypothesis to the list.
+        Add a new hypothesis to the list. # SAIBO: add will trigger sort and pop if the list is full
         """
         if generated_len is not None:
             score = sum_logprobs / (generated_len**self.length_penalty)
@@ -986,6 +1005,13 @@ class BeamHypotheses:
         elif self.early_stopping is False:
             highest_attainable_score = best_sum_logprobs / (cur_len - decoder_prompt_len) ** self.length_penalty
             ret = self.worst_score >= highest_attainable_score
+            # SAIBO: If self.worst_score is indeed greater than or equal to the highest attainable score for the current sequence, 
+            # the method might be concluding that the current sequence isn’t worth continuing, 
+            # as even the best possible completion would not surpass the worst sequence considered so far.
+            # The reason why length_penalty being positive is important is becuase:
+            # if length_penalty = 0, then the probability of a sequence only decreases with length,
+            # this allows us to early conclude that the sequence is not worth continuing.
+            # However, if length_penalty > 0, then the normalized probability of a sequence can increase with length,
             return ret
         # `"never"`: compute the best possible score, depending on the signal of `length_penalty`
         else:

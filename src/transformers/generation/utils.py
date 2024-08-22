@@ -2973,6 +2973,17 @@ class GenerationMixin:
                 next_token_logits, dim=-1
             )  # (batch_size * num_beams, vocab_size)
 
+            # TODO, in case we have constraints in the logits_processor
+            # 
+            # challenge 1. we may not have enough next_token_scores to cover all the beams, e.g. only 2 possible tokens
+            # at a given step, but 10 beams. 
+            # The next_token_scores_processed will contain a lot of -inf values
+            # 
+            # challenge 2. we need to reorder the parsing_state in the logits_processor to match the beam order, i.e. beam_idx
+            # This may need us to add a parameter in logits_processor to indicate the beam_idx, however the interface of logits_processor
+            # is not designed to have such a parameter
+            # Possible solution: we can save the original prompt length and then parse the input_ids from the begninning
+            # this could help us to get ride of the beam_idx parameter
             next_token_scores_processed = logits_processor(input_ids, next_token_scores)
             next_token_scores = next_token_scores_processed + beam_scores[:, None].expand_as(
                 next_token_scores_processed
@@ -3002,6 +3013,11 @@ class GenerationMixin:
 
             # Sample 1 + len(eos_token_id) next tokens for each beam so we have at least 1 non eos token per beam.
             n_eos_tokens = len(eos_token_id) if eos_token_id else 0
+
+            # TODO, as we may not have enough valid tokens, we need to make a decision here:
+            # we keep only n valid tokens, which may be smaller than num_beams -> next_token_scores with dynamic shape
+            # or we keep num_beams tokens, and we may have -inf values in the next_token_scores -> next_token_scores with -inf
+            # the second option seems easier to handle
             next_token_scores, next_tokens = torch.topk(
                 next_token_scores, max(2, 1 + n_eos_tokens) * num_beams, dim=1, largest=True, sorted=True
             )
@@ -3021,10 +3037,14 @@ class GenerationMixin:
                 decoder_prompt_len=decoder_prompt_len,
             )
 
+            # TODO, here the beam_scores may be dynamic shaped because we may have less than num_beams valid tokens
             beam_scores = beam_outputs["next_beam_scores"]
             beam_next_tokens = beam_outputs["next_beam_tokens"]
             beam_idx = beam_outputs["next_beam_indices"]
 
+            # TODO, we could consider padding the input_ids with pad_token_id to have a fixed shape
+            # Or we may just use a variable shape for input_ids, but this is tricky especially with batching
+            # it will be hard to know the boundaries of batches
             input_ids = torch.cat([input_ids[beam_idx, :], beam_next_tokens.unsqueeze(-1)], dim=-1)
 
             model_kwargs = self._update_model_kwargs_for_generation(
